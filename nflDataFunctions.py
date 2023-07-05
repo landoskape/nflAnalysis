@@ -8,7 +8,7 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     """
     This functions analyzes each play that results in a completion and identifies the target receiver on the play. 
     Although the playerName that received the catch is notated (w/ an annoying abbreviation) in the "plays" dataframe, 
-    they aren't specifically mentioned in the tracking data, which means therea bit of a guess needs to be made. 
+    they aren't specifically mentioned in the tracking data, which means that a bit of a guess needs to be made. 
     (No guess needed if the abbreviated names and the display name have a one-to-one correspondence). 
     It does so by finding the location of the football at the time of catch, then choosing the offensive player
     that is closest to that position.
@@ -22,6 +22,7 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     numCompletions = len(completions)
     
     # create some arrays for saving the data about the pass reception
+    event2use = ['pass_outcome_caught', 'pass_outcome_touchdown', 'pass_arrived']
     qbNflID = np.zeros(numCompletions)
     receiverDistance = np.zeros(numCompletions)
     receiverNextClosestDistance = np.zeros(numCompletions)
@@ -47,16 +48,16 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
 
         # Find out row of frame when pass was caught
         # these are the possible events: pass_arrived, pass_forward, pass_outcome_caught - I don't know what they all mean yet
-        event2use = 'pass_outcome_caught'
-        footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use)]
+        idxEvent = 0
+        footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use[0])]
         if len(footballCaughtPosition)!=1: 
             # that means it's a touchdown
-            event2use = 'pass_outcome_touchdown'
-            footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use)]
+            idxEvent = 1
+            footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use[1])]
         if len(footballCaughtPosition)!=1: 
             # that means it's at the "pass_arrived" event
-            event2use = 'pass_arrived'
-            footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use)]
+            idxEvent = 2
+            footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use[2])]
         if len(footballCaughtPosition)!=1:
             raise ValueError("Couldn't figure out when the ball was caught on this play...")
 
@@ -64,7 +65,7 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
         catchLocation = [footballCaughtPosition['x'].iloc[0],footballCaughtPosition['y'].iloc[0]]
 
         # Find out where all offensive players are when the ball was caught
-        offenseSnapshot = currentPlay.loc[(currentPlay['team']==teamOffense) & (currentPlay['event']==event2use)]
+        offenseSnapshot = currentPlay.loc[(currentPlay['team']==teamOffense) & (currentPlay['event']==event2use[idxEvent])]
         offenseLocation = np.array(offenseSnapshot[['x','y']])
         distanceFromFootball = np.sqrt(np.sum((offenseLocation - catchLocation)**2,axis=1))
         idxDistanceFromFootball = np.argsort(distanceFromFootball)
@@ -80,6 +81,21 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     
     return receiverName, descName, receiverDistance, receiverNextClosestDistance, qbNflID
 
+def checkAbbreviatedNames(plays):
+    # Code for checking the abbreviated names!
+    # Returns all unique abbreviated names (note that my detection algorithm isn't perfect)
+    completions = plays.loc[(plays['passResult']=='C'),['playDescription']]
+    numCompletions = len(completions)
+
+    receiverAbbreviation = [None]*numCompletions
+    for idxPlay, playDescription in enumerate(completions['playDescription']):
+        passIdx = playDescription.find(' pass ')
+        toIdx = playDescription[passIdx:].find(' to ')+passIdx+4
+        nextSpaceIdx = playDescription[toIdx:].find(' ')
+        receiverAbbreviation[idxPlay] = playDescription[toIdx:toIdx+nextSpaceIdx]    
+
+    return np.unique(receiverAbbreviation)
+        
 # -------------------------------------loading functions----------------------------------------
 def dataPath(year='2021'):
     hostName = socket.gethostname()
