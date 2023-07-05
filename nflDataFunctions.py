@@ -1,3 +1,4 @@
+import socket
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -81,7 +82,14 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
 
 # -------------------------------------loading functions----------------------------------------
 def dataPath(year='2021'):
-    return Path(f'/Users/landauland/Documents/SportsScience/nfl-big-data-bowl-{year}')
+    hostName = socket.gethostname()
+    if 'Andrews-MBP' in hostName:
+        return Path(f'/Users/landauland/Documents/SportsScience/nfl-big-data-bowl-{year}')
+    elif 'Celia' in hostName:
+        raise ValueError(f"Have not coded the path location on {hostname} yet! - To do so, edit the dataPath() function")
+        #return Path(f'/path/to/wherever/you/keep/the/data/nfl-big-data-bowl-{year}')
+    else:
+        raise ValueError(f"Did not recognize hostname ({hostName})")
 
 def loadGames(dpath=None):
     dpath = dataPath() if dpath is None else dpath
