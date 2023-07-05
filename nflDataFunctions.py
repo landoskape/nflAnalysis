@@ -4,13 +4,23 @@ from pathlib import Path
 
 # --- sanity checks ---
 def identifyTargetReceiver(week,plays,playWeek,weekId=None):
+    """
+    This functions analyzes each play that results in a completion and identifies the target receiver on the play. 
+    Although the playerName that received the catch is notated (w/ an annoying abbreviation) in the "plays" dataframe, 
+    they aren't specifically mentioned in the tracking data, which means therea bit of a guess needs to be made. 
+    (No guess needed if the abbreviated names and the display name have a one-to-one correspondence). 
+    It does so by finding the location of the football at the time of catch, then choosing the offensive player
+    that is closest to that position.
+    """
+    
+    # start by picking plays in the requested week (week input only contains one play week at a time)
     if weekId is None: weekBool = np.full(len(playWeek), True)
     else: weekBool = playWeek==weekId
     # contains dataframe of relevant information for identifying targetReceiver on completed passing plays
     completions = plays.loc[(plays['passResult']=='C') & (weekBool),['gameId','playId','playDescription','possessionTeam','offensePlayResult']]
     numCompletions = len(completions)
     
-    # these are the possible events: pass_arrived, pass_forward, pass_outcome_caught
+    # create some arrays for saving the data about the pass reception
     qbNflID = np.zeros(numCompletions)
     receiverDistance = np.zeros(numCompletions)
     receiverNextClosestDistance = np.zeros(numCompletions)
@@ -18,6 +28,8 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     descName = [None] * numCompletions
     for idx, gameIdPlayId in enumerate(zip(completions['gameId'],completions['playId'])):
         gameId, playId = gameIdPlayId
+        
+        # get the current play description -- which contains an abbreviation of which player received the catch
         playIdx = (week['gameId']==gameId) & (week['playId']==playId)
         currentPlay = week.loc[playIdx] # dataframe containing values from current play
         currentPlayDescription = plays.loc[(plays['gameId']==gameId) & (plays['playId']==playId), ['playDescription']].iloc[0].iloc[0]
@@ -29,10 +41,11 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
         if len(cID)==1: qbNflID[idx] = cID[0]
         else: continue
 
-        # Get which team is on offense (it's either "home" or "away", wtf)
+        # Get which team is on offense (it's either "home" or "away", rather than the city name from plays, wtf)
         teamOffense = currentPlay.loc[currentPlay['nflId']==cID[0],'team'].iloc[0]
 
         # Find out row of frame when pass was caught
+        # these are the possible events: pass_arrived, pass_forward, pass_outcome_caught - I don't know what they all mean yet
         event2use = 'pass_outcome_caught'
         footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use)]
         if len(footballCaughtPosition)!=1: 
@@ -58,7 +71,7 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
         receiverNextClosestDistance[idx] = distanceFromFootball[idxDistanceFromFootball[1]]
         receiverName[idx] = offenseSnapshot['displayName'].iloc[idxDistanceFromFootball[0]]
 
-        # Get name of receiver from play description
+        # Get name of receiver from play description ("QB pass to ReceiverNameAbbreviated ...")
         toIdx = currentPlayDescription.find(' to ')+4
         nextSpaceIdx = currentPlayDescription[toIdx:].find(' ')
         descName[idx] = currentPlayDescription[toIdx:toIdx+nextSpaceIdx]
