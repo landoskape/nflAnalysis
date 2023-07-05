@@ -98,6 +98,7 @@ def checkAbbreviatedNames(plays):
         
 # -------------------------------------loading functions----------------------------------------
 def dataPath(year='2021'):
+    # function to return path to csv files for particular year of the competition
     hostName = socket.gethostname()
     if 'Andrews-MBP' in hostName:
         return Path(f'/Users/landauland/Documents/SportsScience/nfl-big-data-bowl-{year}')
