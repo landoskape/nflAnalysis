@@ -1,9 +1,56 @@
 import socket
 import numpy as np
 import pandas as pd
+import basicFunctions as bf
 from pathlib import Path
 
+# Documentation of (some) of the data: https://www.kaggle.com/competitions/nfl-big-data-bowl-2021/data
+
+# --- standard functions ---
+def getCompletions(plays, playWeek, weekId):
+    if weekId is None: weekBool = np.full(len(playWeek), True)
+    else: weekBool = playWeek==weekId
+    
+    # contains dataframe of relevant information for identifying targetReceiver on completed passing plays
+    completions = plays.loc[(plays['passResult']=='C') & (weekBool),['gameId','playId','playDescription','possessionTeam','offensePlayResult']]
+    return completions
+
 # --- sanity checks ---
+def receiverVelocityCheck(week,plays,playWeek,weekId=None):
+    """
+    This function measures receiver velocity based on their x/y data.
+    It also retrieves the speed/direction (s/dir) data, allowing for a comparison between the two values. 
+    I just want to sanity check that this data makes sense and that I know how to interpret the values. 
+    """
+    
+    # metaparameters:
+    sampleCrop = 2 # how many frames to crop at beginning and end-- should be at least 2 because acceleration is measure...
+    
+    # start by identifying the target receiver (don't need to sanity check every datum, reduce computation time)
+    receiverName = identifyTargetReceiver(week,plays,playWeek,weekId=weekId)[0]
+    completions = getCompletions(plays, playWeek, weekId=weekId)
+    
+    assert len(receiverName)==len(completions), "receiverName and completions are not the same length"
+    
+    # go through each completion, pull out position & movement data from the target receiver
+    for idx, gameIdPlayId in enumerate(zip(completions['gameId'],completions['playId'])):
+        gameId, playId = gameIdPlayId
+        
+        # pull out target receivers data from the current play
+        playIdx = (week['gameId']==gameId) & (week['playId']==playId) & (week['displayName']==receiverName[idx])
+        receiverOnPlay = week.loc[playIdx] # dataframe containing values from current play
+        receiverMovement = np.array(receiverOnPlay[['x','y','s','a','dis','o','dir']])
+        
+        dx,ifpd = bf.fivePointDer(receiverMovement[:,0],h=1,returnIndex=True)
+        dy = bf.fivePointDer(receiverMovement[:,1],h=1)
+        s = receiverMovement[ifpd,2]
+        #...continue...
+        
+        return receiverOnPlay, receiverMovement, gameId, playId, receiverName[idx]
+    
+    
+    
+
 def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     """
     This functions analyzes each play that results in a completion and identifies the target receiver on the play. 
@@ -14,11 +61,7 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     that is closest to that position.
     """
     
-    # start by picking plays in the requested week (week input only contains one play week at a time)
-    if weekId is None: weekBool = np.full(len(playWeek), True)
-    else: weekBool = playWeek==weekId
-    # contains dataframe of relevant information for identifying targetReceiver on completed passing plays
-    completions = plays.loc[(plays['passResult']=='C') & (weekBool),['gameId','playId','playDescription','possessionTeam','offensePlayResult']]
+    completions = getCompletions(plays, playWeek, weekId) # start by identify ing 
     numCompletions = len(completions)
     
     # create some arrays for saving the data about the pass reception
