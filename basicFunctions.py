@@ -2,7 +2,7 @@ import numpy as np
 import scipy as sp
 
 def fivePointDer(signal,h,axis=-1,returnIndex=False):
-    # takes the five point stencil as an estimate of the derivative
+    # takes the five point stencil as a principled estimate of the derivative
     assert isinstance(signal,np.ndarray), "signal must be a numpy array"
     assert isinstance(axis,(int,np.integer)), "axis must be an integer"
     assert -signal.ndim <= axis <= signal.ndim, "requested axis does not exist"

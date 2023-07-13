@@ -2,6 +2,7 @@ import socket
 import numpy as np
 import pandas as pd
 import basicFunctions as bf
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Documentation of (some) of the data: https://www.kaggle.com/competitions/nfl-big-data-bowl-2021/data
@@ -24,7 +25,7 @@ def receiverVelocityCheck(week,plays,playWeek,weekId=None):
     """
     
     # metaparameters:
-    sampleCrop = 2 # how many frames to crop at beginning and end-- should be at least 2 because acceleration is measure...
+    hfpd = 1
     
     # start by identifying the target receiver (don't need to sanity check every datum, reduce computation time)
     receiverName = identifyTargetReceiver(week,plays,playWeek,weekId=weekId)[0]
@@ -32,6 +33,7 @@ def receiverVelocityCheck(week,plays,playWeek,weekId=None):
     
     assert len(receiverName)==len(completions), "receiverName and completions are not the same length"
     
+    dx,dy,speed,direction = [],[],[],[]
     # go through each completion, pull out position & movement data from the target receiver
     for idx, gameIdPlayId in enumerate(zip(completions['gameId'],completions['playId'])):
         gameId, playId = gameIdPlayId
@@ -41,13 +43,23 @@ def receiverVelocityCheck(week,plays,playWeek,weekId=None):
         receiverOnPlay = week.loc[playIdx] # dataframe containing values from current play
         receiverMovement = np.array(receiverOnPlay[['x','y','s','a','dis','o','dir']])
         
-        dx,ifpd = bf.fivePointDer(receiverMovement[:,0],h=1,returnIndex=True)
-        dy = bf.fivePointDer(receiverMovement[:,1],h=1)
-        s = receiverMovement[ifpd,2]
-        #...continue...
+        # fivePointDer is a function that estimates the derivative (and crops the signal, so ifpd is the index)
+        cdx,ifpd = bf.fivePointDer(receiverMovement[:,0],h=hfpd,returnIndex=True)
+        dx.append(cdx)
+        dy.append(bf.fivePointDer(receiverMovement[:,hfpd],h=1))
+        speed.append(receiverMovement[ifpd,2])
+        direction.append(receiverMovement[ifpd,6])
         
-        return receiverOnPlay, receiverMovement, gameId, playId, receiverName[idx]
+    dx,dy,speed,direction = np.concatenate(dx), np.concatenate(dy), np.concatenate(speed), np.concatenate(direction)
     
+    spd = np.sqrt(dx**2 + dy**2)
+    ang = np.arctan2(dx,dy)/2/np.pi*360
+    error = np.mod(ang,360)-direction
+    plt.scatter(np.mod(error+180,360)-180, speed, c='k', s=5, alpha=0.1)
+    plt.xlabel('Error direction estimate (from data or from computed estimate from x/y movement)')
+    plt.ylabel('Speed')
+    plt.title('Error only high when speed is low!')
+    return dx,dy,speed,direction
     
     
 
@@ -66,6 +78,7 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     
     # create some arrays for saving the data about the pass reception
     event2use = ['pass_outcome_caught', 'pass_outcome_touchdown', 'pass_arrived']
+    validPlay = np.full(numCompletions, False)
     qbNflID = np.zeros(numCompletions)
     receiverDistance = np.zeros(numCompletions)
     receiverNextClosestDistance = np.zeros(numCompletions)
@@ -78,7 +91,11 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
         playIdx = (week['gameId']==gameId) & (week['playId']==playId)
         currentPlay = week.loc[playIdx] # dataframe containing values from current play
         currentPlayDescription = plays.loc[(plays['gameId']==gameId) & (plays['playId']==playId), ['playDescription']].iloc[0].iloc[0]
-
+        
+        # check if there is a single forward pass (otherwise it's a confusing and weird play... probably)
+        validPlay[idx] = np.sum(currentPlay.loc[currentPlay['team']=='football']['event']=='pass_forward')==1
+        if not(validPlay[idx]): continue
+            
         # Check if there's a valid QB (i.e. if only one nflId shows up at the QB position...)
         cID = np.unique(currentPlay.loc[currentPlay['position']=='QB','nflId'])
 
@@ -121,8 +138,7 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
         nextSpaceIdx = currentPlayDescription[toIdx:].find(' ')
         descName[idx] = currentPlayDescription[toIdx:toIdx+nextSpaceIdx]
     
-    
-    return receiverName, descName, receiverDistance, receiverNextClosestDistance, qbNflID
+    return receiverName, descName, receiverDistance, receiverNextClosestDistance, qbNflID, validPlay
 
 def checkAbbreviatedNames(plays):
     # Code for checking the abbreviated names!
