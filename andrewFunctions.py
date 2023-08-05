@@ -1,6 +1,7 @@
 import socket
 import numpy as np
-import pandas as pd
+import scipy as sp
+import polars as pl
 import basicFunctions as bf
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -11,9 +12,12 @@ from pathlib import Path
 def getCompletions(plays, playWeek, weekId):
     if weekId is None: weekBool = np.full(len(playWeek), True)
     else: weekBool = playWeek==weekId
+    weekBool = pl.Series(weekBool)
     
     # contains dataframe of relevant information for identifying targetReceiver on completed passing plays
-    completions = plays.loc[(plays['passResult']=='C') & (weekBool),['gameId','playId','playDescription','possessionTeam','offensePlayResult']]
+    completions = plays.filter((plays['passResult']=='C') & weekBool)
+
+    # some useful columns of plays/completions: ['gameId','playId','playDescription','possessionTeam','offensePlayResult']
     return completions
 
 # --- sanity checks ---
@@ -43,8 +47,7 @@ def receiverVelocityCheck(week,plays,playWeek,weekId=None):
         gameId, playId = gameIdPlayId
         
         # pull out target receivers data from the current play
-        playIdx = (week['gameId']==gameId) & (week['playId']==playId) & (week['displayName']==receiverName[idx])
-        receiverOnPlay = week.loc[playIdx] # dataframe containing values from current play
+        receiverOnPlay = week.filter((week['gameId']==gameId) & (week['playId']==playId) & (week['displayName']==receiverName[idx]))
         receiverMovement = np.array(receiverOnPlay[['x','y','s','a','dis','o','dir']])
         
         # fivePointDer is a function that estimates the derivative (and crops the signal, so ifpd is the index)
@@ -88,61 +91,74 @@ def identifyTargetReceiver(week,plays,playWeek,weekId=None):
     receiverNextClosestDistance = np.zeros(numCompletions)
     receiverName = [None] * numCompletions
     descName = [None] * numCompletions
+    receiverSeparation = np.zeros(numCompletions)
+    nonReceiverSeparation = np.full((numCompletions,5), np.nan)
     for idx, gameIdPlayId in enumerate(zip(completions['gameId'],completions['playId'])):
         gameId, playId = gameIdPlayId
         
         # get the current play description -- which contains an abbreviation of which player received the catch
-        playIdx = (week['gameId']==gameId) & (week['playId']==playId)
-        currentPlay = week.loc[playIdx] # dataframe containing values from current play
-        currentPlayDescription = plays.loc[(plays['gameId']==gameId) & (plays['playId']==playId), ['playDescription']].iloc[0].iloc[0]
+        currentPlay = week.filter((week['gameId']==gameId) & (week['playId']==playId)) # dataframe containing values from current play
+        currentPlayDescription = plays.filter((plays['gameId']==gameId) & (plays['playId']==playId))['playDescription'].item()
         
         # check if there is a single forward pass (otherwise it's a confusing and weird play... probably)
-        validPlay[idx] = np.sum(currentPlay.loc[currentPlay['team']=='football']['event']=='pass_forward')==1
+        validPlay[idx] = (currentPlay.filter(currentPlay['team']=='football')['event']=='pass_forward').sum()==1
         if not(validPlay[idx]): continue
             
         # Check if there's a valid QB (i.e. if only one nflId shows up at the QB position...)
-        cID = np.unique(currentPlay.loc[currentPlay['position']=='QB','nflId'])
-
+        cID = currentPlay.filter(currentPlay['position']=='QB')['nflId'].unique()
+        
         # If so, add it to the register, otherwise, skip this play
         if len(cID)==1: qbNflID[idx] = cID[0]
         else: continue
 
         # Get which team is on offense (it's either "home" or "away", rather than the city name from plays, wtf)
-        teamOffense = currentPlay.loc[currentPlay['nflId']==cID[0],'team'].iloc[0]
-
+        teamOffense = currentPlay.filter(currentPlay['nflId']==cID[0])['team'].item(0)
+        
         # Find out row of frame when pass was caught
         # these are the possible events: pass_arrived, pass_forward, pass_outcome_caught - I don't know what they all mean yet
         idxEvent = 0
-        footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use[0])]
+        footballCaughtPosition = currentPlay.filter((currentPlay['team']=='football') & (currentPlay['event']==event2use[idxEvent]))
         if len(footballCaughtPosition)!=1: 
             # that means it's a touchdown
             idxEvent = 1
-            footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use[1])]
+            footballCaughtPosition = currentPlay.filter((currentPlay['team']=='football') & (currentPlay['event']==event2use[idxEvent]))
         if len(footballCaughtPosition)!=1: 
             # that means it's at the "pass_arrived" event
             idxEvent = 2
-            footballCaughtPosition = currentPlay.loc[(currentPlay['team']=='football') & (currentPlay['event']==event2use[2])]
+            footballCaughtPosition = currentPlay.filter((currentPlay['team']=='football') & (currentPlay['event']==event2use[idxEvent]))
         if len(footballCaughtPosition)!=1:
             raise ValueError("Couldn't figure out when the ball was caught on this play...")
 
         # Find out where the ball was caught
-        catchLocation = [footballCaughtPosition['x'].iloc[0],footballCaughtPosition['y'].iloc[0]]
-
+        catchLocation = [footballCaughtPosition['x'].item(0),footballCaughtPosition['y'].item(0)]
+        
         # Find out where all offensive players are when the ball was caught
-        offenseSnapshot = currentPlay.loc[(currentPlay['team']==teamOffense) & (currentPlay['event']==event2use[idxEvent])]
+        offenseSnapshot = currentPlay.filter((currentPlay['team']==teamOffense) & (currentPlay['event']==event2use[idxEvent]))
         offenseLocation = np.array(offenseSnapshot[['x','y']])
         distanceFromFootball = np.sqrt(np.sum((offenseLocation - catchLocation)**2,axis=1))
         idxDistanceFromFootball = np.argsort(distanceFromFootball)
         receiverDistance[idx] = distanceFromFootball[idxDistanceFromFootball[0]]
         receiverNextClosestDistance[idx] = distanceFromFootball[idxDistanceFromFootball[1]]
-        receiverName[idx] = offenseSnapshot['displayName'].iloc[idxDistanceFromFootball[0]]
+        receiverName[idx] = offenseSnapshot['displayName'].item(int(idxDistanceFromFootball[0]))
+
+        teamDefense = 'home' if teamOffense=='away' else 'away'
+        defenseSnapshot = currentPlay.filter((currentPlay['team']==teamDefense) & (currentPlay['event']==event2use[idxEvent]))
+        defenseLocation = np.array(defenseSnapshot[['x','y']])
+
+        distanceOffenseDefense = sp.spatial.distance.cdist(offenseLocation, defenseLocation)
+        closestDefender = np.min(distanceOffenseDefense, axis=1)
+        receiverSeparation[idx] = closestDefender[idxDistanceFromFootball[0]]
+        nonReceiverSeparation[idx,:len(closestDefender)-1] = np.sort([cd for ii,cd in enumerate(closestDefender) if ii!=idxDistanceFromFootball[0]])
 
         # Get name of receiver from play description ("QB pass to ReceiverNameAbbreviated ...")
         toIdx = currentPlayDescription.find(' to ')+4
         nextSpaceIdx = currentPlayDescription[toIdx:].find(' ')
         descName[idx] = currentPlayDescription[toIdx:toIdx+nextSpaceIdx]
-    
-    return receiverName, validPlay, descName, receiverDistance, receiverNextClosestDistance, qbNflID
+
+    outputs = (receiverName, validPlay, descName, receiverDistance, 
+               receiverNextClosestDistance, receiverSeparation, nonReceiverSeparation, qbNflID)
+    return outputs
+
 
 def checkAbbreviatedNames(plays):
     # Code for checking the abbreviated names!
@@ -159,50 +175,3 @@ def checkAbbreviatedNames(plays):
 
     return np.unique(receiverAbbreviation)
         
-# -------------------------------------loading functions----------------------------------------
-def dataPath(year='2021'):
-    # function to return path to csv files for particular year of the competition
-    hostName = socket.gethostname()
-    if 'Andrews-MBP' in hostName:
-        return Path(f'/Users/landauland/Documents/SportsScience/nfl-big-data-bowl-{year}')
-    elif 'Celia' in hostName:
-        raise ValueError(f"Have not coded the path location on {hostname} yet! - To do so, edit the dataPath() function")
-        #return Path(f'/path/to/wherever/you/keep/the/data/nfl-big-data-bowl-{year}')
-    else:
-        raise ValueError(f"Did not recognize hostname ({hostName})")
-
-def loadGames(dpath=None):
-    dpath = dataPath() if dpath is None else dpath
-    return pd.read_csv(dpath/'games.csv')
-
-def loadPlayers(dpath=None):
-    dpath = dataPath() if dpath is None else dpath
-    return pd.read_csv(dpath/'players.csv')
-
-def loadPlays(dpath=None):
-    dpath = dataPath() if dpath is None else dpath
-    return pd.read_csv(dpath/'plays.csv')
-
-def loadPffData(dpath=None):
-    dpath = dataPath() if dpath is None else dpath
-    if (dpath/'pffScoutingData.csv').exists():
-        return pd.read_csv(dpath/'pffScoutingData.csv')
-    return None
-
-def loadData(dpath=None):
-    return loadGames(dpath), loadPlayers(dpath), loadPlays(dpath), loadPffData(dpath)
-
-def loadWeek(dpath=None):
-    return tuple([loadWeekData(week=week) for week in range(1,9)])
-
-def loadWeekData(dpath=None, week=None):
-    assert isinstance(week, int), "week must be an integer between 1 and 8!"
-    dpath = dataPath() if dpath is None else dpath
-    return pd.read_csv(dpath/f'week{week}.csv')
-    
-def playWeek(games, plays):
-    playWeek = np.zeros(len(plays))
-    for game,week in zip(games['gameId'],games['week']):
-        idxPlayDuringGame = plays['gameId']==game
-        playWeek[idxPlayDuringGame] = week
-    return playWeek
