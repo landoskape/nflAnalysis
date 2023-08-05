@@ -18,7 +18,8 @@ def fivePointDer(signal,h,axis=-1,returnIndex=False):
     if returnIndex: return fpd, slice(2*h,N-2*h) # index of central points for each computation
     return fpd
 
-
+def edge2center(edges):
+    return np.mean(np.stack((edges[:-1],edges[1:])),axis=0)
 
 
 
